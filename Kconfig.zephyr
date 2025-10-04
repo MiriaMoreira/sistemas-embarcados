@@ -1,0 +1,9 @@
+menu "Configurações do Hello World Timer"
+
+config HELLO_INTERVAL
+    int "Intervalo do timer em milissegundos"
+    default 1000
+    help
+      Define o intervalo em que a mensagem Hello World será exibida.
+
+endmenu
