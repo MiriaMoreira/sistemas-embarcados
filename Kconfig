@@ -1,3 +1,16 @@
-menu "Zephyr"
-source "Kconfig.zephyr"
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "Configurações do Hello Timer"
+
+# Importa as opções padrão do Zephyr (logs, console, UART etc.)
+rsource "$ZEPHYR_BASE/Kconfig.zephyr"
+
+menu "Configurações do Hello Timer"
+
+config HELLO_INTERVAL
+    int "Intervalo do Hello (ms)"
+    default 1000
+    help
+      Define o intervalo em milissegundos entre as mensagens do timer.
+
 endmenu
