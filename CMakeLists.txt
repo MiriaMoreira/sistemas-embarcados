@@ -3,6 +3,6 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(atv1_se)
+project(atv2_se)
 
 target_sources(app PRIVATE src/main.c)

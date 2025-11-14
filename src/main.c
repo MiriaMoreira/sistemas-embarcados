@@ -1,61 +1,114 @@
 #include <zephyr/kernel.h>
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/pwm.h>
-#include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/random/random.h>
+#include <string.h>
 
-LOG_MODULE_REGISTER(main, LOG_LEVEL_INF); // Módulo de log
+typedef struct {
+    char tipo;      // 'T' = temperatura, 'U' = umidade
+    int valor;
+} sensor_msg_t;
 
-#define LED_NODE DT_ALIAS(led0)
-#define BUTTON_NODE DT_ALIAS(sw0)
-#define PWM_LED_NODE DT_ALIAS(pwm_led0)
+typedef struct {
+    char texto[64];
+} log_msg_t;
 
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED_NODE, gpios);
-static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(BUTTON_NODE, gpios);
-static const struct pwm_dt_spec pwm_led = PWM_DT_SPEC_GET(PWM_LED_NODE);
+K_MSGQ_DEFINE(msgq_in,  sizeof(sensor_msg_t), 10, 4);
+K_MSGQ_DEFINE(msgq_out, sizeof(sensor_msg_t), 10, 4);
+K_MSGQ_DEFINE(logq,     sizeof(log_msg_t),    10, 4);
 
-void fade_effect(void) {
-    uint32_t period = pwm_led.period;
-    LOG_INF("Iniciando efeito de fade (PWM)");
-    for (uint32_t pulse = 0; pulse < period; pulse += period / 100) {
-        pwm_set_pulse_dt(&pwm_led, pulse);
-        k_msleep(10);
-    }
-    for (uint32_t pulse = period; pulse > 0; pulse -= period / 100) {
-        pwm_set_pulse_dt(&pwm_led, pulse);
-        k_msleep(10);
-    }
-    LOG_INF("Efeito de fade concluído");
+
+
+void enviar_para_log(const char *msg)
+{
+    log_msg_t lm;
+    strncpy(lm.texto, msg, sizeof(lm.texto) - 1);
+    lm.texto[sizeof(lm.texto) - 1] = '\0';
+
+    k_msgq_put(&logq, &lm, K_NO_WAIT);
 }
 
-void main(void)
+
+void produtor_temp(void)
 {
-    if (!device_is_ready(led.port) || !device_is_ready(button.port) || !device_is_ready(pwm_led.dev)) {
-        LOG_ERR("Erro: algum dispositivo não está pronto!");
-        return;
+    while (1) {
+        sensor_msg_t msg = {
+            .tipo = 'T',
+            .valor = 18 + (sys_rand32_get() % 20)  // entre 18 e 37
+        };
+
+        k_msgq_put(&msgq_in, &msg, K_FOREVER);
+        printk("[TEMP] Produzido: %d C\n", msg.valor);
+        k_sleep(K_MSEC(1500));
     }
+}
 
-    gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
-    gpio_pin_configure_dt(&button, GPIO_INPUT);
+void produtor_umid(void)
+{
+    while (1) {
+        sensor_msg_t msg = {
+            .tipo = 'U',
+            .valor = 30 + (sys_rand32_get() % 50)  // entre 30 e 79
+        };
 
-    LOG_INF("Sistema iniciado. Pressione o botão para alternar entre modos.");
+        k_msgq_put(&msgq_in, &msg, K_FOREVER);
+        printk("[UMID] Produzido: %d %%\n", msg.valor);
+        k_sleep(K_MSEC(1700));
+    }
+}
 
-    int mode = 0;
-    int led_state = 0;
+void filtro(void)
+{
+    sensor_msg_t entrada;
 
     while (1) {
-        if (gpio_pin_get_dt(&button)) {
-            mode = !mode;
-            LOG_INF("Botão pressionado -> Modo alterado para: %s", mode ? "PWM (fade)" : "Digital");
-            k_msleep(300); 
+        k_msgq_get(&msgq_in, &entrada, K_FOREVER);
+
+        bool valido = false;
+
+        if (entrada.tipo == 'T') {
+            valido = (entrada.valor >= 18 && entrada.valor <= 30);
+        } else if (entrada.tipo == 'U') {
+            valido = (entrada.valor >= 40 && entrada.valor <= 70);
         }
 
-        if (mode == 0) {
-            led_state = !led_state;
-            gpio_pin_set_dt(&led, led_state);
-            LOG_INF("Modo Digital: LED %s", led_state ? "LIGADO" : "DESLIGADO");
-            k_msleep(500);
+        if (valido) {
+            k_msgq_put(&msgq_out, &entrada, K_FOREVER);
         } else {
-            fade_effect();
+            char log_msg[64];
+            snprintf(log_msg, sizeof(log_msg),
+                     "Dado invalido (%c=%d)", entrada.tipo, entrada.valor);
+            enviar_para_log(log_msg);
         }
     }
 }
+
+void consumidor(void)
+{
+    sensor_msg_t msg;
+
+    while (1) {
+        k_msgq_get(&msgq_out, &msg, K_FOREVER);
+
+        if (msg.tipo == 'T') {
+            printk("[CONS] Temperatura: %d C\n", msg.valor);
+        } else {
+            printk("[CONS] Umidade: %d %%\n", msg.valor);
+        }
+    }
+}
+
+void thread_log(void)
+{
+    log_msg_t lm;
+
+    while (1) {
+        k_msgq_get(&logq, &lm, K_FOREVER);
+        printk("[LOG] %s\n", lm.texto);
+    }
+}
+
+K_THREAD_DEFINE(th_temp,   1024, produtor_temp,  NULL, NULL, NULL, 3, 0, 0);
+K_THREAD_DEFINE(th_umid,   1024, produtor_umid,  NULL, NULL, NULL, 3, 0, 0);
+K_THREAD_DEFINE(th_filtro, 1024, filtro,         NULL, NULL, NULL, 2, 0, 0);
+K_THREAD_DEFINE(th_cons,   1024, consumidor,     NULL, NULL, NULL, 1, 0, 0);
+K_THREAD_DEFINE(th_log,    1024, thread_log,     NULL, NULL, NULL, 4, 0, 0);
